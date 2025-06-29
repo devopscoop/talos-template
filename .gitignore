@@ -1,0 +1,6 @@
+.pre-commit-config.yaml
+
+# Do not commit the output of `talosctl gen config` in the template repo.
+controlplane.yaml
+worker.yaml
+talosconfig
