@@ -14,7 +14,7 @@ These instructions are for creating a single-node Kubernetes homelab cluster on 
    - Hardware Type: Cloud Server
    - Cloud: Nocloud
    - Machine Architecture:
-     - Enable SecureBoot #TODO: Skip. This doesn't seem to work?
+     - Enable SecureBoot
    - System Extentions:
      - siderolabs/iscsi-tools # Needed for Longhorn
      - siderolabs/qemu-guest-agent
@@ -26,11 +26,12 @@ These instructions are for creating a single-node Kubernetes homelab cluster on 
      - Check the Advanced box
      - Enable "Start at boot"
    - OS:
-     - ISO image: nocloud-amd64.iso
+     - ISO image: nocloud-amd64-secureboot.iso
    - System:
      - Graphic card: VirtIO-GPU (for a higher resolution terminal)
      - BIOS: OVMF (UEFI)
      - EFI Storage: local-lvm
+     - Disable "Pre-Enroll keys"
      - Enable "QEMU Agent"
      - Enable "Add TPM"
      - TPM Storage: local-lvm
@@ -43,11 +44,6 @@ These instructions are for creating a single-node Kubernetes homelab cluster on 
    - Confirm:
      - Enable "Start after created"
 1. In ProxMox, select the VM you just created, then click on "Console".
-1. Press any key to enter the Boot Manager Menu.
-1. Select "Device Manager" with the arrow keys, then press Enter.
-1. Select "Secure Boot Configuration", then press Enter.
-1. Select "Reset Secure Boot Keys", then press Enter. Are you sure? Yes.
-1. Press Esc until you get back to the first screen, then select "Reset", and press Enter.
 1. Follow [these instructions](https://www.talos.dev/v1.11/introduction/prodnotes/) to create a production cluster. For example:
    1. Set vars and generate secrets and config:
       ```
@@ -55,14 +51,7 @@ These instructions are for creating a single-node Kubernetes homelab cluster on 
       export YOUR_ENDPOINT=192.168.8.7
       talosctl gen secrets -o secrets.yaml
       export CLUSTER_NAME=worclustershire
-      talosctl gen config --with-secrets secrets.yaml $CLUSTER_NAME https://$YOUR_ENDPOINT:6443
-      
       talosctl gen config --with-secrets secrets.yaml $CLUSTER_NAME https://$YOUR_ENDPOINT:6443 --install-image=factory.talos.dev/installer-secureboot/376567988ad370138ad8b2698212367b8edcb69b5fd68c80be1f2ec7d603b4ba:v1.11.1 --install-disk=/dev/sda --config-patch @tpm-disk-encryption.yaml
-
-      ```
-   1. Backup original controlplane.yaml file:
-      ```
-      cp controlplane.yaml controlplane.yaml.bak
       ```
    1. Allow scheduling workloads on the control plane node:
       ```
