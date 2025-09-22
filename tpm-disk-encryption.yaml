@@ -1,0 +1,15 @@
+# https://www.talos.dev/v1.11/talos-guides/install/bare-metal-platforms/secureboot/#booting-talos-linux-in-secureboot-mode
+
+# tpm-disk-encryption.yaml
+machine:
+  systemDiskEncryption:
+    ephemeral:
+      provider: luks2
+      keys:
+        - slot: 0
+          tpm: {}
+    state:
+      provider: luks2
+      keys:
+        - slot: 0
+          tpm: {}

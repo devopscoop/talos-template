@@ -1,0 +1,4 @@
+# https://www.talos.dev/v1.11/talos-guides/howto/workers-on-controlplane/
+
+cluster:
+  allowSchedulingOnControlPlanes: true

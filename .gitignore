@@ -1,6 +1,8 @@
 .pre-commit-config.yaml
 
-# Do not commit the output of `talosctl gen config` in the template repo.
+# These all contain secrets. They must not be committed unless they've been encrypted.
 controlplane.yaml
 worker.yaml
 talosconfig
+secrets.yaml
+worclustershire1.yaml
