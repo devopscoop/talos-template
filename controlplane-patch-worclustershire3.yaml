@@ -1,0 +1,12 @@
+machine:
+  network:
+    hostname: worclustershire3
+    interfaces:
+      - deviceSelector:
+          busPath: "0*" # should select any hardware network device, if you have just one, it will be selected
+        dhcp: false
+        addresses:
+          - 192.168.8.6/24
+        routes:
+          - network: 0.0.0.0/0
+            gateway: 192.168.8.1
