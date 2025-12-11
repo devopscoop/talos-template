@@ -1,10 +1,1 @@
 .pre-commit-config.yaml
-
-# These all contain secrets. They must not be committed unless they've been encrypted.
-controlplane.yaml
-worker.yaml
-talosconfig
-secrets.yaml
-worclustershire1.yaml
-worclustershire2.yaml
-worclustershire3.yaml

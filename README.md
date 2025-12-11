@@ -11,6 +11,7 @@ Based on:
 # Prerequisites
 
 - a ProxMox server
+- a wasabisys.com account for offsite backups for Longhorn
 
 # Process
 
@@ -109,7 +110,7 @@ Based on:
    talosctl machineconfig patch controlplane.yaml --patch @controlplane-patch-worclustershire2.yaml --output worclustershire2.yaml
    talosctl machineconfig patch controlplane.yaml --patch @controlplane-patch-worclustershire3.yaml --output worclustershire3.yaml
    ```
-1. If you are using QEMU, change the image in your worclustershire3.yaml file to this:
+1. SKIP (This doesn't appear to actually work): If you are using QEMU, change the image in your worclustershire3.yaml file to this:
    ```
    machine:
        install:
@@ -118,8 +119,10 @@ Based on:
 1. Apply config:
    ```
    talosctl apply-config --insecure -n 192.168.8.163 -e 192.168.8.4 -f worclustershire2.yaml
-   talosctl apply-config --insecure -n 192.168.8.186 -e 192.168.8.4 -f worclustershire3.yaml
+   talosctl apply-config --insecure -n 192.168.8.216 -e 192.168.8.4 -f worclustershire3.yaml
    ```
+1. Upgrade nodes so they have the proper extensions. See the Upgrading Talos section below.
+1. Add the other nodes to the VIP???
 
 # virt-manager (QEMU/KVM)
 
