@@ -13,6 +13,24 @@ Based on:
 - a ProxMox server
 - a wasabisys.com account for offsite backups for Longhorn
 
+## Install required packages
+
+This repo ships package manifests that install the CLI tools it uses (`talosctl`, `kubectl`):
+
+- macOS, using [Homebrew](https://brew.sh/) and the `Brewfile`:
+
+  ```shell
+  brew bundle
+  ```
+
+- Arch Linux, using the `pkglist.txt` (all packages are in the official repos):
+
+  ```shell
+  grep -vE '^(#|$)' pkglist.txt | sudo pacman -S --needed -
+  ```
+
+On other operating systems, install the tools listed above manually. The optional virt-manager (QEMU/KVM) path below additionally needs `virt-manager`, `swtpm`, and NetworkManager — Linux-only tools listed as commented-out entries in `pkglist.txt`.
+
 # Process
 
 1. Download a custom ISO image for ProxMox [here](https://factory.talos.dev/). Use default settings except for these:
