@@ -1,0 +1,159 @@
+# Based on:
+# https://github.com/opentofu/setup-opentofu
+# and devopscoop/aws-eks-template's .github/workflows/opentofu-aws-eks.yml.
+
+# When we create a pull request (PR) to the main branch, this workflow runs `tofu plan`, and adds the output as a comment to the PR. If the plan looks good, we merge (ie. push) the code to the main branch. On push to main, this runs a `tofu apply`.
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - .github/workflows/opentofu-talos.yml
+      - cluster/**
+  pull_request:
+    branches:
+      - main
+    paths:
+      - .github/workflows/opentofu-talos.yml
+      - cluster/**
+defaults:
+  run:
+    working-directory: cluster
+# Every run, plan or apply, takes the lock on the same state file, so
+# overlapping runs (e.g. Dependabot opening several PRs at once) fail with
+# "Error acquiring the state lock". Run them one at a time instead. The default
+# `queue: single` keeps only one run pending and cancels the rest; `max` queues
+# up to 100 in FIFO order. Never cancel in progress: killing a run mid-apply
+# can leave the state locked, half-applied, or a node mid-upgrade.
+# https://docs.github.com/en/actions/reference/workflows-and-actions/workflow-syntax#concurrency
+concurrency:
+  group: opentofu-talos-state
+  queue: max
+  cancel-in-progress: false
+permissions:
+  id-token: write
+  contents: read
+  pull-requests: write
+jobs:
+  opentofu:
+    # The nodes are on a private LAN, and both plan (talos_machine reads each
+    # node's running version and config) and apply talk to them directly, so a
+    # GitHub-hosted runner can't reach them. Register a self-hosted runner on
+    # the node network.
+    # https://docs.github.com/en/actions/hosting-your-own-runners
+    runs-on: self-hosted
+    # This is a template repo; the cluster isn't real here, so don't run against
+    # it. Repos created from the template have a different name, so the workflow
+    # runs normally for them.
+    #
+    # The second condition keeps PRs from forks off the self-hosted runner: a
+    # fork's workflow code would otherwise run on your LAN.
+    if: >-
+      github.repository != 'devopscoop/talos-template' &&
+      (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)
+    env:
+      # OpenTofu state/plan encryption passphrase (cluster/versions.tf). Losing
+      # this secret means losing the state.
+      TF_VAR_state_passphrase: ${{ secrets.TOFU_STATE_PASSPHRASE }}
+    steps:
+      # Credentials for the S3 state backend. For a non-AWS S3-compatible store
+      # (e.g. Wasabi), remove this step and instead add AWS_ACCESS_KEY_ID and
+      # AWS_SECRET_ACCESS_KEY to `env:` above from repository secrets.
+      - uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
+        with:
+          # Must match `region` in cluster/terraform.tfvars.
+          aws-region: us-west-1
+          # This must be manually updated to our actual ARN.
+          role-to-assume: arn:aws:iam::999999999999:role/github-actions-talos-tf-Role-REDACTED
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: opentofu/setup-opentofu@a1320f892987e89d278cc92dc5adc984fb93aca4 # v2.0.2
+        with:
+          # Prefer `tofu_version_file` over `tofu_version`, because the version file ensures that both local and workflow runs are locked to the same version.
+          # Path is resolved relative to the repo root (GITHUB_WORKSPACE), not the job's working-directory.
+          tofu_version_file: cluster/.opentofu-version
+      # https://github.com/magnetikonline/terraform-github-action-cache-example
+      - name: Configure Terraform plugin cache
+        run: |
+          echo "TF_PLUGIN_CACHE_DIR=$HOME/.terraform.d/plugin-cache" >>"$GITHUB_ENV"
+          mkdir --parents "$HOME/.terraform.d/plugin-cache"
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.terraform.d/plugin-cache
+          key: terraform-${{ runner.os }}-${{ hashFiles('**/.terraform.lock.hcl') }}
+          restore-keys: |
+            terraform-${{ runner.os }}-
+      - id: fmt
+        run: tofu fmt -recursive -check
+        continue-on-error: true
+      - id: init
+        run: tofu init
+      - id: validate
+        run: tofu validate -no-color
+      - id: plan
+        # Write plan output directly to file via tee rather than capturing to a step output variable.
+        # Passing large plan output (e.g. many destroys) via ${{ steps.plan.outputs.stdout }} in an
+        # env var triggers "Argument list too long" (ARG_MAX) when printf/bash tries to expand it.
+        # Secrets in the plan show as (sensitive value); plan.file itself is
+        # encrypted by the `plan` block in cluster/versions.tf.
+        run: tofu plan -concise -no-color -input=false -out=plan.file 2>&1 | tee plan-output.txt; exit "${PIPESTATUS[0]}"
+        # We need to continue-on-error here so we can print the tofu plan output even on failure.
+        continue-on-error: true
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: github.event_name == 'pull_request'
+        with:
+          name: tofu-plan-output
+          path: cluster/plan-output.txt
+          retention-days: 7
+      - uses: actions/github-script@d746ffe35508b1917358783b479e04febd2b8f71 # v9.0.0
+        if: github.event_name == 'pull_request'
+        # zizmor's template-injection audit flagged interpolating `${{ ... }}`
+        # expressions directly into the inline `script:` below. GitHub expands
+        # those expressions into the script's source before Node runs it, so an
+        # attacker-controlled value (e.g. github.actor, a branch name, or plan
+        # output) could break out of a string and execute arbitrary JavaScript.
+        # We pass the values as environment variables here and read them via
+        # `process.env.*` in the script, where they're treated as inert data
+        # rather than code. See https://docs.zizmor.sh/audits/#template-injection
+        env:
+          ACTOR: ${{ github.actor }}
+          EVENT_NAME: ${{ github.event_name }}
+          FMT_OUTCOME: ${{ steps.fmt.outcome }}
+          PLAN_OUTCOME: ${{ steps.plan.outcome }}
+          TF_WORKING_DIR: cluster
+          WORKFLOW: ${{ github.workflow }}
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const fs = require('fs');
+            const path = require('path');
+            const wd = path.join(process.env.GITHUB_WORKSPACE, process.env.TF_WORKING_DIR);
+            const planOutput = fs.readFileSync(path.join(wd, 'plan-output.txt'), 'utf8');
+            const runUrl = `https://github.com/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
+            // GitHub PR comments are capped at 65536 chars. Leave ~2000 for the surrounding template.
+            const PLAN_LIMIT = 63000;
+            const planSection = planOutput.length > PLAN_LIMIT
+              ? `Plan output too large for a comment ([download from workflow artifacts](${runUrl}))`
+              : `<details><summary>Show Plan</summary>\n\n\`\`\`tofu\n\n${planOutput}\n\`\`\`\n\n</details>`;
+            const output = [
+              `#### OpenTofu Format and Style \`${process.env.FMT_OUTCOME}\``,
+              `#### OpenTofu Plan \`${process.env.PLAN_OUTCOME}\``,
+              planSection,
+              `*Pusher: @${process.env.ACTOR}, Action: \`${process.env.EVENT_NAME}\`, Working Directory: \`${process.env.TF_WORKING_DIR}\`, Workflow: \`${process.env.WORKFLOW}\`*`,
+            ].join('\n\n');
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: output,
+            });
+      # We need the workflow to show as failed when the plan fails, so we're breaking it here.
+      - name: Check plan result
+        if: steps.plan.outcome == 'failure'
+        run: exit 1
+      # -parallelism=1 upgrades one node at a time, so an OS upgrade never
+      # reboots two control planes at once and loses etcd quorum (cluster/main.tf).
+      - if: github.ref == 'refs/heads/main'
+        run: tofu apply -concise -no-color -input=false -parallelism=1 plan.file

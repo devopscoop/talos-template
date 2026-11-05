@@ -1,0 +1,14 @@
+# OpenTofu working files. Commit cluster/.terraform.lock.hcl.
+.terraform/
+*.tfstate
+*.tfstate.*
+plan.file
+plan-output.txt
+
+# Credentials, e.g. from `tofu output -raw talosconfig > talosconfig`, or left
+# over from the pre-OpenTofu talosctl workflow. These hold cluster PKI.
+secrets.yaml
+talosconfig
+kubeconfig
+controlplane.yaml
+worker.yaml

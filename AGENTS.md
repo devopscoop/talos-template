@@ -5,88 +5,103 @@ to this file — edit `AGENTS.md`, and do not replace the symlink with a real fi
 
 ## What this repo is
 
-A template/runbook for standing up a Talos Linux Kubernetes homelab cluster on
-ProxMox. There is no application code, no build, no test suite, and no linter —
-the deliverables are `README.md` (a numbered runbook a human follows by hand) and
-the YAML patch fragments it feeds to `talosctl`.
+A template for a Talos Linux Kubernetes homelab cluster on ProxMox, managed with
+OpenTofu and the `siderolabs/talos` provider (pinned to 0.12.0). The VMs are
+created by hand following `README.md`. Everything after that lives in `cluster/`:
+the image schematic, the secrets, the machine configs, apply, bootstrap, and
+OS and Kubernetes upgrades. `.github/workflows/opentofu-talos.yml` plans on
+PRs and applies on merge to `main`.
 
 Consequences for agents:
 
-- Changing a YAML patch means changing the README step that applies it, and vice
-  versa. They are a single unit; neither is self-documenting.
-- Nothing here can be verified by running it — a real ProxMox host, a booted
-  Talos ISO, and node IPs are required. Do not claim a change is tested.
-- `talosctl validate --config <file> --mode metal` is the one useful local check
-  on a *generated* machine config. It does not work on the bare patch fragments
-  in this repo, since they are partial documents.
+- Use `tofu`, never `terraform`. The version is pinned in
+  `cluster/.opentofu-version` (read by tenv and by `setup-opentofu` in CI) and
+  in `required_version` in `cluster/versions.tf`. `cluster/update_opentofu.sh`
+  keeps the two in sync.
+- Local checks: `tofu fmt -recursive -check` and `tofu validate` (after `tofu init -backend=false`). `talosctl validate --config <file> --mode metal` works
+  on a rendered machine config, not on the patch fragments.
+- Nothing beyond that can be verified without the real nodes. Do not claim a
+  change is tested. Never run `tofu apply` against the real backend unless
+  asked: an apply can reboot or upgrade nodes.
+- A change to `cluster/` and the README step that describes it is one unit.
 
-## The patch pipeline
-
-The patch files are not applied independently — they layer in a fixed order, and
-each `talosctl machineconfig patch` writes back **in place** with
-`--output controlplane.yaml`, so patches accumulate on one growing base file:
+## How `cluster/` fits together
 
 ```
-talosctl gen config --config-patch @tpm-disk-encryption.yaml   # -> controlplane.yaml, worker.yaml, talosconfig
-  + @controlplane-patch-allowSchedulingOnControlPlanes.yaml    # -> controlplane.yaml (in place)
-  + @controlplane-patch-vip.yaml                               # -> controlplane.yaml (in place)
-  + @controlplane-patch-<cluster><N>.yaml                      # -> <cluster><N>.yaml  (per node, forks off)
-  + @longhorn-patch.yaml                                       # -> <cluster><N>.yaml  (per node, in place)
+image.tf    extensions -> talos_image_factory_schematic -> urls (iso_url, installer_secureboot)
+main.tf     talos_machine_secrets
+              -> data.talos_machine_configuration.node[each]   (common patches + install + network)
+              -> talos_machine.node[each]                      (apply config, OS upgrades, drain)
+              -> talos_cluster.this                            (bootstrap etcd, upgrade-k8s)
+              -> talos_cluster_kubeconfig.this / data.talos_client_configuration.this -> outputs
 ```
 
-Things this ordering implies, which are easy to get wrong:
+Things that are easy to get wrong:
 
-- `tpm-disk-encryption.yaml` is passed to `gen config`, not to `machineconfig
-  patch`. It must be applied at generation time, because rekeying LUKS on an
-  already-installed node is not a config patch.
-- Every node config inherits allowSchedulingOnControlPlanes and the VIP, because
-  both are merged into `controlplane.yaml` before any node forks off it. Adding
-  a cluster-wide setting means inserting it *before* the per-node step.
-- `controlplane-patch-vip.yaml` and the per-node patches both target the network
-  interface using the identical `deviceSelector: busPath: "0*"`. That is what
-  makes them merge into one interface instead of producing two. Keep the
-  selector byte-identical when adding interface patches.
-- `worker.yaml` is generated but never used. This is an all-control-plane
-  cluster; that is the reason allowSchedulingOnControlPlanes exists here.
+- Patch order lives in `local.common_patches` (`patches/*.yaml`), followed by
+  the generated install and network patches. A cluster-wide setting is a new
+  file in `patches/`, added to that list. A per-node or parameterized setting
+  goes in the `yamlencode` patches in `main.tf`.
+- The VIP and each node's static address are in **one** interface entry
+  (`deviceSelector.busPath: "0*"`). Do not split them into separate patches;
+  if you must, the selector has to be byte-identical or Talos creates two
+  interfaces.
+- `talos_machine` uses `for_each`, so the nodes can't be chained with
+  `depends_on`. Rolling upgrades depend on `apply -parallelism=1`, which the
+  README and the workflow both use. Keep it in both places.
+- `ignore_kubernetes_upgrade_drift = true` on `talos_machine` makes
+  `talos_cluster` the only thing that upgrades Kubernetes. Keep
+  `kubernetes_version` shared between `talos_cluster` and the machine
+  configuration (it is a single variable).
+- `talos_config_contract` (the machine-config schema, e.g. `v1.11`) is
+  deliberately separate from `talos_version` (the installed OS). Never bump the
+  contract as part of an OS upgrade.
+- `talos_machine` connects to the node at its static IP, including the first
+  apply in maintenance mode, and it waits at the same address after the
+  reboot. That is why the README requires a DHCP reservation equal to the
+  static IP. Don't "fix" this by pointing `endpoint` at a DHCP address: the
+  wait-for-boot would hang on the old address.
+- The talosconfig endpoints are the node IPs, not the VIP, on purpose.
+- All-control-plane cluster. No worker configs exist, and
+  `patches/allow-scheduling-on-control-planes.yaml` is why workloads run.
 
 ## Template values
 
-This is a template, and the checked-in values are one person's homelab. A new
-cluster requires editing these, mostly by hand:
+The checked-in values are one person's homelab. They all live in
+`cluster/terraform.tfvars` (bucket, cluster name, `nodes`, VIP, gateway,
+versions, extensions). The workflow has its own placeholders: `aws-region` and
+`role-to-assume`.
 
-| Value | Where |
-| --- | --- |
-| Cluster name `worclustershire` | patch filenames, `hostname:` in each node patch, README `CLUSTER_NAME` |
-| Node IPs `192.168.8.4/.5/.6` | `controlplane-patch-<cluster><N>.yaml` |
-| VIP `192.168.8.7` | `controlplane-patch-vip.yaml`, README `YOUR_ENDPOINT` |
-| Gateway `192.168.8.1` | each node patch |
-| Installer image digest | README (`--install-image`, and the upgrade command) |
+## Secrets
 
-Node patch files follow `controlplane-patch-<clustername><N>.yaml`, and the
-`hostname:` inside must match the filename. Adding a fourth node means a new
-patch file plus README steps in both "Adding more nodes" and the apply block.
+- The state holds the cluster PKI (`talos_machine_secrets`). It is encrypted
+  by OpenTofu (`encryption` block, pbkdf2 + AES-GCM, `enforced = true`) with
+  `TF_VAR_state_passphrase`, which is the `TOFU_STATE_PASSPHRASE` secret in CI.
+  Never weaken `enforced`, never add a fallback, and never put the passphrase
+  in a file.
+- Never print the `talosconfig`/`kubeconfig` outputs or `machine_configuration`
+  values into an issue, PR, commit, or chat. Don't use `nonsensitive()` on them
+  in committed code.
+- `.gitignore` covers `.terraform/`, state and plan files, and the credential
+  files the old `talosctl` workflow produced. Commit
+  `cluster/.terraform.lock.hcl`.
 
 ## Conventions
 
-- Every YAML patch opens with a comment linking the upstream Talos or Longhorn
-  doc that justifies it. Preserve this when editing, and add the link when
-  introducing a new patch — it is how a reader tells a deliberate setting from a
-  copied one.
-- The docs target **Talos v1.11**. The version appears in doc URLs, the
-  `:v1.11.5` image tags, and the package manifest comments. Bumping it means
-  updating all three, not just the image tag.
+- Every file in `cluster/patches/`, and every inline patch in `main.tf`, carries
+  a comment linking the upstream Talos or Longhorn doc that justifies it.
+  Preserve this when editing, and add the link when introducing a new patch —
+  it is how a reader tells a deliberate setting from a copied one.
+- The docs target **Talos v1.11**. The version appears in doc URLs,
+  `talos_version`/`talos_config_contract` in `terraform.tfvars`, and the
+  package manifest comments. Bumping it means updating all of them.
+- Provider and OpenTofu versions are exact pins, not ranges. Dependabot bumps
+  the provider (`terraform` ecosystem, `/cluster`) and the actions.
 - GitHub Actions are pinned to full commit SHAs with a trailing `# v4`-style
-  comment. Keep new actions pinned the same way.
+  comment. Keep new actions pinned the same way. The workflow runs on a
+  self-hosted runner on the LAN. Keep the fork-PR guard in its `if:`.
 - Nodes must use static IPs (`dhcp: false`). A node whose address changes drops
   out of the cluster.
-
-## Generated files and secrets
-
-There is no `.gitignore`. Following the README produces `secrets.yaml`,
-`talosconfig`, `controlplane.yaml`, `worker.yaml`, and `<cluster><N>.yaml` in the
-repo root — `secrets.yaml` and `talosconfig` hold cluster PKI. Never commit
-these, and never paste their contents into an issue, PR, or commit message. The
-README carries an open `TODO: Encrypt your secrets.yaml file`.
 
 ## Package manifests
 

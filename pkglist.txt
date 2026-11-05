@@ -1,17 +1,26 @@
 # Arch Linux package list for talos-template — the pacman/AUR equivalent of
 # the Brewfile. Installs every CLI tool used or referenced by this repo.
 #
-# All packages are in the official repos, so plain pacman works (as do yay/paru):
+# Requires an AUR helper (yay or paru) because tenv-bin is an AUR package;
+# everything else is in the official repos.
 #
 # Usage:
-#   grep -vE '^(#|$)' pkglist.txt | sudo pacman -S --needed -
+#   grep -vE '^(#|$)' pkglist.txt | yay -S --needed -
+#   grep -vE '^(#|$)' pkglist.txt | paru -S --needed -
 
-# talosctl — generates Talos secrets/config, applies config, bootstraps the
-# cluster, fetches kubeconfig, upgrades nodes. The docs target Talos v1.11.x.
+# tenv — AUR; provides `tofu` from cluster/.opentofu-version. Do NOT install
+# opentofu directly. Used for `tofu init/plan/apply` and cluster/update_opentofu.sh.
+tenv-bin
+
+# talosctl — operating the nodes after OpenTofu has built them: health checks,
+# logs, dashboards. The docs target Talos v1.11.x.
 talosctl
 
 # kubectl — merging kubeconfigs and using the cluster
 kubectl
+
+# zizmor — GitHub Actions workflow auditing, referenced in .github/workflows/opentofu-talos.yml
+zizmor
 
 # Optional — only for the virt-manager (QEMU/KVM) path instead of ProxMox.
 # Uncomment to install:
